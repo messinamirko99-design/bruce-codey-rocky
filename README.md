@@ -1,4 +1,4 @@
-![Bruce su Codey Rocky](./boards/codey-rocky/ui_preview.png)
+
 
 # :robot: Bruce per Makeblock Codey Rocky
 
