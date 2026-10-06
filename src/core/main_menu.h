@@ -7,6 +7,9 @@
 #include "menu_items/ClockMenu.h"
 #include "menu_items/ConfigMenu.h"
 #include "menu_items/ConnectMenu.h"
+#ifdef CODEY_ROCKY
+#include "menu_items/CodeyMenu.h"
+#endif
 #include "menu_items/EthernetMenu.h"
 #include "menu_items/FMMenu.h"
 #include "menu_items/FileMenu.h"
@@ -35,6 +38,9 @@ public:
     RFMenu rfMenu;
     ScriptsMenu scriptsMenu;
     WifiMenu wifiMenu;
+#ifdef CODEY_ROCKY
+    CodeyMenu codeyMenu;
+#endif
 #if !defined(LITE_VERSION)
     LoRaMenu loraMenu;
     EthernetMenu ethernetMenu;

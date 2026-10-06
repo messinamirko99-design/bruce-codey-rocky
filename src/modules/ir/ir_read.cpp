@@ -76,11 +76,10 @@ static String getParsedProtocolName(const decode_results &r) {
 }
 
 void IrRead::setup() {
-    irrecv.enableIRIn();
-
 #ifdef USE_BOOST
     PPM.enableOTG();
 #endif
+    // Ensure RX pin is a known IR_RX_PINS entry (defaults to RXLED=5 on Codey)
     const std::vector<std::pair<String, int>> pins = IR_RX_PINS;
     int count = 0;
     for (auto pin : pins) {
@@ -88,7 +87,10 @@ void IrRead::setup() {
     }
     if (count == 0) gsetIrRxPin(true);
 
-    setup_ir_pin(bruceConfigPins.irRx, INPUT_PULLUP);
+    // Configure RX GPIO then start the receiver (pin already set in ctor
+    // from bruceConfigPins.irRx default = RXLED).
+    setup_ir_pin(bruceConfigPins.irRx, INPUT); // no pull-up: demodulator drives the line
+    irrecv.enableIRIn();
     if (headless) return;
     returnToMenu = true;
     std::vector<Option> quickRemoteOptions = {
@@ -144,6 +146,7 @@ void IrRead::loop() {
             returnToMenu = true;
             button_pos = 0;
             quickloop = false;
+            irrecv.disableIRIn(); // free RMT / GPIO for next use
 #ifdef USE_BOOST
             PPM.disableOTG();
 #endif
@@ -177,6 +180,7 @@ void IrRead::begin() {
     _read_signal = false;
 
     display_banner();
+#ifndef TINY_DISPLAY
     if (quickloop) {
         padprintln("Waiting for signal of button: " + String(quickButtons[button_pos]));
     } else {
@@ -185,18 +189,41 @@ void IrRead::begin() {
 
     tft.println("");
     display_btn_options();
+#endif
 
     delay(300);
 }
 
 void IrRead::cls() {
+#ifdef TINY_DISPLAY
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+#else
     drawMainBorder();
     tft.setCursor(10, 28);
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+#endif
 }
 
 void IrRead::display_banner() {
     cls();
+#ifdef TINY_DISPLAY
+    // 16x8 text-only status
+    if (_read_signal) {
+        String proto = getParsedProtocolName(results);
+        if (proto.length() == 0) proto = "RAW";
+        proto.toUpperCase();
+        tft.drawString(proto.substring(0, 4), 0, 0);
+    } else if (quickloop && button_pos < (int)quickButtons.size()) {
+        String b = quickButtons[button_pos];
+        b.toUpperCase();
+        tft.drawString(b.substring(0, 4), 0, 0);
+    } else {
+        tft.drawString("WAIT", 0, 0);
+    }
+    tft.flushNow();
+#else
     tft.setTextSize(FM);
     padprintln("IR Read");
 
@@ -204,9 +231,14 @@ void IrRead::display_banner() {
     padprintln("--------------");
     padprintln("Signals captured: " + String(signals_read));
     tft.println("");
+#endif
 }
 
 void IrRead::display_btn_options() {
+#ifdef TINY_DISPLAY
+    // Buttons are the physical A/B/C — no room for help text
+    return;
+#else
     tft.println("");
     tft.println("");
     if (_emulate_mode) {
@@ -221,6 +253,7 @@ void IrRead::display_btn_options() {
         if (signals_read > 0) { padprintln("Press [OK]   to save device"); }
     }
     padprintln("Press [ESC]  to exit");
+#endif
 }
 
 void IrRead::read_signal() {
@@ -230,8 +263,15 @@ void IrRead::read_signal() {
 
     raw = (results.decode_type == decode_type_t::UNKNOWN) || hasACState(results.decode_type);
 
-    display_banner();
+    String raw_signal = parse_raw_signal();
+    _captured_raw_signal = raw_signal;
 
+#ifdef TINY_DISPLAY
+    // Codey Rocky: as soon as a valid signal arrives, save it to LittleFS
+    // with a generic name and keep listening for the next one.
+    auto_save_littlefs();
+#else
+    display_banner();
     if (!raw) {
         String proto = getParsedProtocolName(results);
         padprintln("Protocol: " + (proto.length() ? proto : "UNKNOWN"));
@@ -239,12 +279,86 @@ void IrRead::read_signal() {
     }
 
     padprint("RAW Data Captured:");
-    String raw_signal = parse_raw_signal();
-    _captured_raw_signal = raw_signal;
     tft.println(raw_signal.substring(0, 45) + (raw_signal.length() > 45 ? "..." : ""));
 
     display_btn_options();
-    delay(500);
+    delay(300);
+#endif
+}
+
+void IrRead::auto_save_littlefs() {
+    // Always store RAW timings so replay is bit-exact (parsed NEC/etc can
+    // lose information or use the wrong endianness on send).
+    raw = true;
+    strDeviceContent = "";
+    String btn = "BTN" + String(signals_read);
+    append_to_file_str(btn);
+
+    // Pick next free generic filename: IR_001.ir, IR_002.ir, ...
+    if (!LittleFS.exists("/BruceIR")) LittleFS.mkdir("/BruceIR");
+    int n = 1;
+    String filename;
+    do {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "IR_%03d", n);
+        filename = String(buf);
+        n++;
+    } while (LittleFS.exists("/BruceIR/" + filename + ".ir") && n < 1000);
+
+    // Refuse empty payloads (decode overflow / zero-length raw)
+    if (strDeviceContent.indexOf("data:") < 0 || strDeviceContent.length() < 20) {
+        Serial.println("IR auto-save: empty/invalid payload, skip");
+        tft.fillScreen(bruceConfig.bgColor);
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        tft.setTextSize(1);
+        tft.drawString("BAD", 0, 0);
+        tft.flushNow();
+        delay(500);
+        _read_signal = false;
+        _captured_raw_signal = "";
+        irrecv.resume();
+        begin();
+        return;
+    }
+
+    File file = LittleFS.open("/BruceIR/" + filename + ".ir", FILE_WRITE);
+    if (!file) {
+        tft.fillScreen(bruceConfig.bgColor);
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        tft.setTextSize(1);
+        tft.drawString("ERR", 0, 0);
+        tft.flushNow();
+        delay(500);
+        _read_signal = false;
+        _captured_raw_signal = "";
+        irrecv.resume();
+        begin();
+        return;
+    }
+
+    file.println("Filetype: Bruce IR File");
+    file.println("Version: 1");
+    file.println("#");
+    file.println("# " + filename);
+    file.print(strDeviceContent);
+    file.close();
+
+    signals_read++;
+    strDeviceContent = "";
+
+    // Brief confirmation on the matrix, then keep listening
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    tft.drawString("SAVE", 0, 0);
+    tft.flushNow();
+    delay(600);
+
+    _read_signal = false;
+    _emulate_mode = false;
+    _captured_raw_signal = "";
+    irrecv.resume();
+    begin(); // back to WAIT
 }
 
 void IrRead::discard_signal() {

@@ -8,6 +8,17 @@
 #include "ir_utils.h"
 #include <IRutils.h>
 
+// Codey Rocky IR LED is active-HIGH (LED_ON=HIGH). IRremoteESP8266
+// "inverted" means mark=LOW, so inverted = (LED_ON == LOW).
+static inline bool ir_tx_inverted() { return LED_ON == LOW; }
+
+// Never return IRsend by value — the RMT channel is owned by the object and
+// gets destroyed/corrupted on copy. Always construct in the caller scope.
+static inline void ir_tx_prepare() {
+    setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
+}
+
+
 uint32_t swap32(uint32_t value) {
     return ((value & 0x000000FF) << 24) | ((value & 0x0000FF00) << 8) | ((value & 0x00FF0000) >> 8) |
            ((value & 0xFF000000) >> 24);
@@ -312,7 +323,8 @@ void sendIRCommand(IRCode *code, bool hideDefaultUI) {
 }
 
 void sendNECCommand(String address, String command, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
     uint16_t addressValue = strtoul(address.substring(0, 2).c_str(), nullptr, 16);
@@ -334,7 +346,8 @@ void sendNECCommand(String address, String command, bool hideDefaultUI) {
 }
 
 void sendNECextCommand(String address, String command, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
 
@@ -373,7 +386,8 @@ void sendNECextCommand(String address, String command, bool hideDefaultUI) {
 }
 
 void sendRC5Command(String address, String command, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx, true); // Set the GPIO to be used to sending the message.
+    setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
+    IRsend irsend(bruceConfigPins.irTx, true);
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
     uint8_t addressValue = strtoul(address.substring(0, 2).c_str(), nullptr, 16);
@@ -393,7 +407,8 @@ void sendRC5Command(String address, String command, bool hideDefaultUI) {
 }
 
 void sendRC6Command(String address, String command, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx, true); // Set the GPIO to be used to sending the message.
+    setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
+    IRsend irsend(bruceConfigPins.irTx, true);
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
     address.replace(" ", "");
@@ -417,7 +432,8 @@ void sendRC6Command(String address, String command, bool hideDefaultUI) {
 }
 
 void sendSamsungCommand(String address, String command, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
     uint8_t addressValue = strtoul(address.substring(0, 2).c_str(), nullptr, 16);
@@ -439,7 +455,8 @@ void sendSamsungCommand(String address, String command, bool hideDefaultUI) {
 }
 
 void sendSonyCommand(String address, String command, uint8_t nbits, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
 
@@ -487,7 +504,8 @@ void sendSonyCommand(String address, String command, uint8_t nbits, bool hideDef
 }
 
 void sendKaseikyoCommand(String address, String command, bool hideDefaultUI) {
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
 
@@ -546,7 +564,8 @@ bool sendDecodedCommand(String protocol, String value, uint8_t bits, bool hideDe
     decode_type_t type = strToDecodeType(protocol.c_str());
     if (type == decode_type_t::UNKNOWN) return false;
 
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     bool success = false;
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
@@ -604,7 +623,8 @@ void sendRawCommand(uint16_t frequency, String rawData, bool hideDefaultUI) {
     PPM.enableOTG();
 #endif
 
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
+    ir_tx_prepare();
+    IRsend irsend(bruceConfigPins.irTx, ir_tx_inverted());
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
 
@@ -629,7 +649,14 @@ void sendRawCommand(uint16_t frequency, String rawData, bool hideDefaultUI) {
     // Serial.println(dataBuffer[count-1]);
     // Serial.println(dataBuffer[0]);
 
-    // Send raw command
+    // Send raw command (0 Hz → 38 kHz default)
+    if (frequency == 0) frequency = 38000;
+    if (count < 2) {
+        Serial.println("Raw data too short, abort TX");
+        free(dataBuffer);
+        digitalWrite(bruceConfigPins.irTx, LED_OFF);
+        return;
+    }
     irsend.sendRaw(dataBuffer, count, frequency);
 
     if (bruceConfigPins.irTxRepeats > 0) {

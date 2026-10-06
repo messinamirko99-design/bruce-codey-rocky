@@ -24,7 +24,10 @@ void ensureWifiPlatform() {
     portEXIT_CRITICAL(&platformMux);
 
     if (needNetif) {
-        ESP_ERROR_CHECK(esp_netif_init());
+        esp_err_t e = esp_netif_init();
+        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+            Serial.printf("esp_netif_init: %s\n", esp_err_to_name(e));
+        }
         portENTER_CRITICAL(&platformMux);
         netifInitialized = true;
         portEXIT_CRITICAL(&platformMux);
@@ -32,7 +35,9 @@ void ensureWifiPlatform() {
 
     if (needLoop) {
         esp_err_t err = esp_event_loop_create_default();
-        if (err != ESP_ERR_INVALID_STATE) { ESP_ERROR_CHECK(err); }
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            Serial.printf("esp_event_loop: %s\n", esp_err_to_name(err));
+        }
         portENTER_CRITICAL(&platformMux);
         eventLoopCreated = true;
         portEXIT_CRITICAL(&platformMux);
@@ -84,24 +89,41 @@ bool _wifiConnect(const String &ssid, int encryption) {
 }
 
 bool _connectToWifiNetwork(const String &ssid, const String &pwd) {
-    if (FORCE_RADIO_TEARDOWN_ON_SWITCH) {
-        if (BLEConnected) {
-            displayWarning("Board with no PSRAM, closing BLE Stack");
-            vTaskDelay(700 / portTICK_PERIOD_MS);
-        }
-        stopBLEStack();
+#ifdef FORCE_RADIO_TEARDOWN_ON_SWITCH
+#if FORCE_RADIO_TEARDOWN_ON_SWITCH
+    if (BLEConnected) {
+        displayWarning("Closing BLE");
         vTaskDelay(300 / portTICK_PERIOD_MS);
     }
+    stopBLEStack();
+    vTaskDelay(200 / portTICK_PERIOD_MS);
+#endif
+#endif
 
+#ifdef TINY_DISPLAY
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    tft.drawString("WIFI", 0, 0);
+    tft.flushNow();
+#else
     drawMainBorderWithTitle("WiFi Connect");
     padprintln("");
     padprint("Connecting to: " + ssid + ".");
+#endif
+
+    // Ensure STA mode without tearing down the whole stack hard
     WiFi.mode(WIFI_MODE_STA);
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-    WiFi.begin(ssid, pwd);
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+    WiFi.disconnect(false, false);
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+    WiFi.begin(ssid.c_str(), pwd.c_str());
 
     int i = 1;
     while (WiFi.status() != WL_CONNECTED) {
+#ifdef TINY_DISPLAY
+        progressHandler(i, 20, "WIFI");
+#else
         if (tft.getCursorX() >= tftWidth - 12) {
             padprintln("");
             padprint("");
@@ -111,18 +133,35 @@ bool _connectToWifiNetwork(const String &ssid, const String &pwd) {
 #else
         Serial.print(".");
 #endif
-
+#endif
         if (i > 20) {
+#ifdef TINY_DISPLAY
+            tft.fillScreen(bruceConfig.bgColor);
+            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+            tft.drawString("FAIL", 0, 0);
+            tft.flushNow();
+#else
             displayError("Wifi Offline");
-            vTaskDelay(500 / portTICK_RATE_MS);
+#endif
+            vTaskDelay(500 / portTICK_PERIOD_MS);
             break;
         }
-
-        vTaskDelay(500 / portTICK_RATE_MS);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
         i++;
+        yield();
     }
 
-    return WiFi.status() == WL_CONNECTED;
+    bool ok = WiFi.status() == WL_CONNECTED;
+#ifdef TINY_DISPLAY
+    if (ok) {
+        tft.fillScreen(bruceConfig.bgColor);
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        tft.drawString("OK", 0, 0);
+        tft.flushNow();
+        vTaskDelay(400 / portTICK_PERIOD_MS);
+    }
+#endif
+    return ok;
 }
 
 bool _setupAP() {
@@ -152,10 +191,12 @@ void wifiDisconnect() {
 bool wifiConnectMenu(wifi_mode_t mode) {
     if (WiFi.isConnected()) return false; // safeguard
 
-    if (FORCE_RADIO_TEARDOWN_ON_SWITCH) {
+    #if defined(FORCE_RADIO_TEARDOWN_ON_SWITCH) && FORCE_RADIO_TEARDOWN_ON_SWITCH
+    {
         stopBLEStack();
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
+#endif
 
     // Check if WiFi is in transition
     if (wifiTransitioning) {
@@ -245,10 +286,12 @@ bool wifiConnectMenu(wifi_mode_t mode) {
 void wifiConnectTask(void *pvParameters) {
     if (WiFi.status() == WL_CONNECTED) return;
 
-    if (FORCE_RADIO_TEARDOWN_ON_SWITCH) {
+    #if defined(FORCE_RADIO_TEARDOWN_ON_SWITCH) && FORCE_RADIO_TEARDOWN_ON_SWITCH
+    {
         stopBLEStack();
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
+#endif
 
     // Check if WiFi is in transition
     if (wifiTransitioning) {
@@ -293,10 +336,12 @@ String checkMAC() { return String(WiFi.macAddress()); }
 bool wifiConnecttoKnownNet(void) {
     if (WiFi.isConnected()) return true; // safeguard
 
-    if (FORCE_RADIO_TEARDOWN_ON_SWITCH) {
+    #if defined(FORCE_RADIO_TEARDOWN_ON_SWITCH) && FORCE_RADIO_TEARDOWN_ON_SWITCH
+    {
         stopBLEStack();
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
+#endif
 
     // Check if WiFi is in transition
     if (wifiTransitioning) {

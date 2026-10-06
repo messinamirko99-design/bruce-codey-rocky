@@ -2,7 +2,7 @@
 #define LIB_HAL_DISPLAY_TFT_H
 #include <pins_arduino.h>
 
-#if !defined(USE_ARDUINO_GFX) && !defined(USE_LOVYANGFX) && !defined(USE_TFT_ESPI) && !defined(USE_M5GFX)
+#if !defined(USE_ARDUINO_GFX) && !defined(USE_LOVYANGFX) && !defined(USE_TFT_ESPI) && !defined(USE_M5GFX) && !defined(USE_LEDMATRIX)
 #define USE_TFT_ESPI
 #endif
 
@@ -21,6 +21,9 @@ class tft_logger;
 
 #elif defined(USE_M5GFX)
 #include "m5gfx.h"
+
+#elif defined(USE_LEDMATRIX)
+#include "ledmatrix.h"
 
 #endif
 #endif // LIB_HAL_DISPLAY_TFT_H

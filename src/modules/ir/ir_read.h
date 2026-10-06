@@ -1,9 +1,18 @@
 #include <IRrecv.h>
 #include <globals.h>
 
+// Codey Rocky / no-PSRAM: keep capture buffer small (DRAM limited)
+#if defined(TINY_DISPLAY) || defined(CODEY_ROCKY)
+#define BRUCE_IR_CAPTURE_BUF 512
+#define BRUCE_IR_TIMEOUT_MS 15
+#else
+#define BRUCE_IR_CAPTURE_BUF (SAFE_STACK_BUFFER_SIZE / 2)
+#define BRUCE_IR_TIMEOUT_MS 50
+#endif
+
 class IrRead {
 public:
-    IRrecv irrecv = IRrecv(bruceConfigPins.irRx, SAFE_STACK_BUFFER_SIZE / 2, 50);
+    IRrecv irrecv = IRrecv(bruceConfigPins.irRx, BRUCE_IR_CAPTURE_BUF, BRUCE_IR_TIMEOUT_MS);
 
     IrRead(bool headless_mode = false, bool raw_mode = false);
 
@@ -36,6 +45,7 @@ private:
     void save_device();
     void save_signal();
     void discard_signal();
+    void auto_save_littlefs();
     void append_to_file_str(String btn_name);
     bool write_file(String filename, FS *fs);
     String parse_raw_signal();

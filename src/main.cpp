@@ -155,6 +155,7 @@ volatile int tftHeight = VECTOR_DISPLAY_DEFAULT_WIDTH;
 #include "modules/others/audio.h"                // for playAudioFile
 #include "modules/rf/rf_utils.h"                 // for initCC1101once
 #include <Wire.h>
+#include <cctype>
 
 /*********************************************************************
  **  Function: begin_storage
@@ -228,7 +229,90 @@ void begin_tft() {
  **  Function: boot_screen
  **  Draw boot screen
  *********************************************************************/
+// Try to load a custom 16x8 monochrome boot image from LittleFS.
+// Supported files (first match wins):
+//   /boot.bin  — raw 16 bytes, one column per byte (bit0 = top row)
+//   /boot.cpp, /boot.h, /boot.txt — image2cpp-style hex dump (0xNN, ...)
+// Returns true if an image was drawn.
+static bool tiny_draw_custom_boot() {
+#ifdef TINY_DISPLAY
+    auto parse_hex_bytes = [](const String &src, uint8_t *out, int maxn) -> int {
+        int n = 0;
+        int i = 0;
+        const int len = src.length();
+        while (i < len && n < maxn) {
+            // find "0x" or "0X"
+            int p = src.indexOf("0x", i);
+            if (p < 0) p = src.indexOf("0X", i);
+            if (p < 0) break;
+            i = p + 2;
+            if (i + 1 >= len) break;
+            char h[3] = { (char)src[i], (char)src[i + 1], 0 };
+            // allow single digit
+            if (!isxdigit((unsigned char)h[0])) continue;
+            if (!isxdigit((unsigned char)h[1])) { h[1] = 0; }
+            out[n++] = (uint8_t)strtoul(h, nullptr, 16);
+            i += h[1] ? 2 : 1;
+        }
+        return n;
+    };
+
+    auto draw_fb = [](const uint8_t *fb16) {
+        tft.fillScreen(TFT_BLACK);
+        for (int x = 0; x < 16; x++) {
+            uint8_t col = fb16[x];
+            for (int y = 0; y < 8; y++) {
+                if (col & (1 << y)) tft.drawPixel(x, y, bruceConfig.priColor);
+            }
+        }
+        tft.flushNow();
+    };
+
+    // 1) raw binary
+    if (LittleFS.exists("/boot.bin")) {
+        File f = LittleFS.open("/boot.bin", "r");
+        if (f) {
+            uint8_t fb[16] = {0};
+            int got = f.read(fb, 16);
+            f.close();
+            if (got >= 16) { draw_fb(fb); return true; }
+        }
+    }
+
+    // 2) image2cpp text export
+    const char *candidates[] = {"/boot.cpp", "/boot.h", "/boot.txt", "/boot.c"};
+    for (const char *path : candidates) {
+        if (!LittleFS.exists(path)) continue;
+        File f = LittleFS.open(path, "r");
+        if (!f) continue;
+        String body;
+        body.reserve(512);
+        while (f.available() && body.length() < 2000) body += (char)f.read();
+        f.close();
+        uint8_t fb[32] = {0};
+        int n = parse_hex_bytes(body, fb, 32);
+        if (n >= 16) {
+            // image2cpp "Horizontal" packs 8 rows × 2 bytes; convert if needed:
+            // If we got exactly 16 bytes, treat as column-major (vertical 1-bit)
+            // which matches TM1640 / Codey layout.
+            draw_fb(fb);
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
 void boot_screen() {
+#ifdef TINY_DISPLAY
+    tft.fillScreen(bruceConfig.bgColor);
+    if (tiny_draw_custom_boot()) return;
+    // Default: "BRUCE" text
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    tft.drawString("BRUC", 0, 0);
+    return;
+#endif
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.setTextSize(FM);
     tft.drawPixel(0, 0, bruceConfig.bgColor);
@@ -246,6 +330,20 @@ void boot_screen() {
  **  Draw boot screen
  *********************************************************************/
 void boot_screen_anim() {
+#ifdef TINY_DISPLAY
+    boot_screen();
+    int tiny_start = millis();
+    while (millis() < tiny_start + 1500) {
+        if (check(AnyKeyPress)) { // any key skips the boot screen
+            tft.fillScreen(bruceConfig.bgColor);
+            delay(10);
+            return;
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+    tft.fillScreen(bruceConfig.bgColor);
+    return;
+#endif
     boot_screen();
     int i = millis();
     // checks for boot.jpg in SD and LittleFS for customization

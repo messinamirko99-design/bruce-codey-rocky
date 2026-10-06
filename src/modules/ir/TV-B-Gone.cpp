@@ -158,9 +158,9 @@ void StartTvBGone() {
     PPM.enableOTG();
 #endif
     checkIrTxPin();
-    IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
-    irsend.begin();
     setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
+    IRsend irsend(bruceConfigPins.irTx, LED_ON == LOW);
+    irsend.begin();
 
     // determine region
     options = {
@@ -201,10 +201,12 @@ void StartTvBGone() {
                 rawData[(k * 2) + 1] = powerCode->times[ti + 1] * 10; // ontime * 10
             }
 
-            // Update progress every 5 codes instead of every code - reduces UI overhead
-            if (i % 5 == 0) {
-                progressHandler(i, num_codes);
-            }
+            // TINY matrix: update every code so the bar moves; others every 5
+#ifdef TINY_DISPLAY
+            progressHandler(i, num_codes);
+#else
+            if (i % 5 == 0) progressHandler(i, num_codes);
+#endif
 
             irsend.sendRaw(rawData, (numpairs * 2), freq);
             unlock_ir_tx();  // Release mutex immediately so other tasks can run

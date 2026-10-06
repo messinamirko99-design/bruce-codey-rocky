@@ -4,6 +4,20 @@
 #include <globals.h>
 
 MainMenu::MainMenu() {
+#ifdef CODEY_ROCKY
+    // Codey Rocky: only the menus that make sense on this hardware
+    // (no RF transceivers, RFID, GPS or Ethernet on board)
+    _menuItems = {
+        &wifiMenu,
+        &bleMenu,
+        &irMenu,
+        &codeyMenu,
+        &fileMenu,
+        &clockMenu,
+        &othersMenu,
+        &configMenu,
+    };
+#else
     _menuItems = {
         &wifiMenu,
         &bleMenu,
@@ -29,6 +43,7 @@ MainMenu::MainMenu() {
         &othersMenu,
         &configMenu,
     };
+#endif
 
     _totalItems = _menuItems.size();
 }

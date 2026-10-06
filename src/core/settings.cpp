@@ -959,8 +959,6 @@ void setClock() {
 
 void runClockLoop(bool showMenuHint) {
     int tmp = 0;
-    unsigned long hintStartTime = millis();
-    bool hintVisible = showMenuHint;
 
 #if defined(HAS_RTC)
 #if defined(HAS_RTC_BM8563)
@@ -975,6 +973,64 @@ void runClockLoop(bool showMenuHint) {
     // Delay due to SelPress() detected on run
     tft.fillScreen(bruceConfig.bgColor);
     delay(300);
+
+#ifdef TINY_DISPLAY
+    // 16x8: show HHMM (4 digits) every second — no alternating halves.
+    // Digits come from CHAR_FONT and are packed across the full width.
+    tmp = 0; // force immediate first draw
+    for (;;) {
+        if (tmp == 0 || millis() - tmp >= 1000) {
+            struct tm ti;
+#if defined(HAS_RTC)
+            ti = _rtc.getTimeStruct();
+#else
+            ti = rtc.getTimeStruct();
+#endif
+            updateTimeStr(ti);
+
+            int hour = ti.tm_hour;
+            if (!bruceConfig.clock24hr) {
+                int h12 = hour % 12;
+                if (h12 == 0) h12 = 12;
+                hour = h12;
+            }
+            int minute = ti.tm_min;
+            int second = ti.tm_sec;
+
+            // 3x5: always HHMM (4 fixed digits, no colon) → stable layout, full width
+            char shown[5];
+            snprintf(shown, sizeof(shown), "%02d%02d", hour, minute);
+
+            tft.fillScreen(bruceConfig.bgColor);
+            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+            tft.setTextSize(1);
+            tft.setTextFont(2); // 3x5 compact numbers
+            tft.drawString(shown, 0, 0);
+            tft.setTextFont(1); // restore CHAR_FONT for menus
+            tft.flushNow();
+            tmp = millis();
+        }
+
+        if (check(SelPress)) {
+            while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+            tft.fillScreen(bruceConfig.bgColor);
+            tft.flushNow();
+            if (showMenuHint) break;
+            returnToMenu = true;
+            break;
+        }
+        if (check(EscPress)) {
+            while (check(EscPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+            tft.fillScreen(bruceConfig.bgColor);
+            tft.flushNow();
+            returnToMenu = true;
+            break;
+        }
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+#else
+    unsigned long hintStartTime = millis();
+    bool hintVisible = showMenuHint;
 
     for (;;) {
         if (millis() - tmp > 1000) {
@@ -1042,6 +1098,7 @@ void runClockLoop(bool showMenuHint) {
 
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
+#endif
 }
 
 /*********************************************************************

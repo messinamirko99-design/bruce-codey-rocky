@@ -8,7 +8,11 @@
 #include <interface.h> //for charging ischarging to print charging indicator
 #include <memory>
 
+#ifdef TINY_DISPLAY
+#define MAX_MENU_SIZE 8
+#else
 #define MAX_MENU_SIZE (int)(tftHeight / 25)
+#endif
 
 // Send the ST7789 into or out of sleep mode
 void panelSleep(bool on) {
@@ -32,6 +36,41 @@ bool __attribute__((weak)) isCharging() { return false; }
 ***************************************************************************************/
 void displayScrollingText(const String &text, Opt_Coord &coord) {
     int len = text.length();
+    if (len <= 0) return;
+
+#ifdef TINY_DISPLAY
+    // Scroll when the label is longer than what fits (~4 chars on 16x8).
+    const int visible = (coord.size > 0) ? (int)coord.size : 4;
+    String base = text;
+    base.toUpperCase();
+    // Trailing spaces so the loop restarts cleanly
+    String displayText = base + "   ";
+    const int scrollLen = (int)displayText.length();
+    static int i = 0;
+    static long _lastmillis = 0;
+    static String _lastLabel;
+    if (_lastLabel != base) {
+        _lastLabel = base;
+        i = 0;
+        _lastmillis = 0;
+    }
+    if ((int)base.length() <= visible) return; // fits — already drawn by drawOptions
+    if (millis() >= _lastmillis + 250) {
+        // Always build a window of exactly `visible` chars (circular)
+        String scrollingPart;
+        scrollingPart.reserve(visible);
+        for (int k = 0; k < visible; k++) {
+            scrollingPart += displayText.charAt((i + k) % scrollLen);
+        }
+        tft.fillScreen(coord.bgcolor);
+        tft.setTextColor(coord.fgcolor, coord.bgcolor);
+        tft.setTextSize(1);
+        tft.drawString(scrollingPart, 0, 0);
+        i = (i + 1) % scrollLen;
+        _lastmillis = millis();
+        if (i == 0) _lastmillis = millis() + 600; // pause at the start of the label
+    }
+#else
     String displayText = text + "        "; // Add spaces for smooth looping
     int scrollLen = len + 8;                // Full text plus space buffer
     static int i = 0;
@@ -51,13 +90,13 @@ void displayScrollingText(const String &text, Opt_Coord &coord) {
             bruceConfig.bgColor
         ); // Clear display area
         tft.setCursor(coord.x, coord.y);
-        tft.setCursor(coord.x, coord.y);
         tft.print(scrollingPart);
         if (i >= scrollLen - coord.size) i = -1; // Loop back
         _lastmillis = millis();
         i++;
         if (i == 1) _lastmillis = millis() + 1000;
     }
+#endif
 }
 
 /***************************************************************************************
@@ -133,6 +172,16 @@ bool wakeUpScreen() {
 ** Description:   Display Red Stripe with information
 ***************************************************************************************/
 void displayRedStripe(String text, uint16_t fgcolor, uint16_t bgcolor) {
+#ifdef TINY_DISPLAY
+    tft.fillScreen(bruceConfig.bgColor); // always clear to black first
+    tft.setTextColor(fgcolor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    String up = text;
+    up.toUpperCase();
+    tft.drawString(up.substring(0, 4), 0, 0);
+    tft.flushNow();
+    return;
+#endif
     // detect if not running in interactive mode -> show nothing onscreen and return immediately
     // if (server || isSleeping || isScreenOff) return; // webui is running
 
@@ -175,6 +224,35 @@ int8_t displayMessage(
     const char *message, const char *leftButton, const char *centerButton, const char *rightButton,
     uint16_t color
 ) {
+#ifdef TINY_DISPLAY
+    int8_t tinyTotal = (leftButton ? 1 : 0) + (centerButton ? 1 : 0) + (rightButton ? 1 : 0);
+    if (tinyTotal == 0) return -1;
+    int8_t tinySel = 0;
+    bool tinyRedraw = true;
+    while (true) {
+        if (check(PrevPress) || check(EscPress)) {
+            tinySel = (tinySel - 1 + tinyTotal) % tinyTotal;
+            tinyRedraw = true;
+        }
+        if (check(NextPress)) {
+            tinySel = (tinySel + 1) % tinyTotal;
+            tinyRedraw = true;
+        }
+        if (check(SelPress)) break;
+        if (tinyRedraw) {
+            tft.fillScreen(bruceConfig.bgColor);
+            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+            tft.setTextSize(1);
+            String up = String(message);
+            up.toUpperCase();
+            tft.drawString(up.substring(0, 4), 0, 0);
+            tft.flushNow();
+            tinyRedraw = false;
+        }
+        delay(10);
+    }
+    return tinySel;
+#endif
 #ifdef HAS_SCREEN
     uint8_t oldTextDatum = tft.getTextDatum();
 #endif
@@ -502,6 +580,7 @@ int loopOptions(
     int devModeCounter = 0;
     static unsigned long _clock_bat_timer = millis();
     if (options.size() > MAX_MENU_SIZE) { menuSize = MAX_MENU_SIZE; }
+#ifndef TINY_DISPLAY
     if (index > 0)
         tft.fillRoundRect(
             tftWidth * 0.10,
@@ -511,6 +590,7 @@ int loopOptions(
             5,
             bruceConfig.bgColor
         );
+#endif
     if (index >= options.size()) index = 0;
     bool firstRender = true;
     static unsigned long menuOpenTs = 0; // timestamp when menu was first rendered
@@ -538,8 +618,10 @@ int loopOptions(
             options[index].hovered = true;
 
             bool renderedByLambda = false;
+#ifndef TINY_DISPLAY
             if (options[index].hover)
                 renderedByLambda = options[index].hover(options[index].hoverPointer, true);
+#endif
 
             if (!renderedByLambda) {
                 if (menuType == MENU_TYPE_SUBMENU) drawSubmenu(index, options, subText);
@@ -563,10 +645,23 @@ int loopOptions(
         checkShortcutPress(); // shortctus to quickly start apps without navigating the menus
 #endif
 
+#ifdef TINY_DISPLAY
+        {
+            // Always scroll long labels; 4 chars fit on the 16x8 matrix
+            coord.size = 4;
+            coord.x = 0;
+            coord.y = 0;
+            coord.fgcolor = bruceConfig.priColor;
+            coord.bgcolor = bruceConfig.bgColor;
+            String txt = options[index].label;
+            displayScrollingText(txt, coord);
+        }
+#else
         if (menuType == MENU_TYPE_REGULAR) {
             String txt = options[index].label;
             displayScrollingText(txt, coord);
         }
+#endif
 
         // Checks ESC Press first, to not exit after PrevPress is processed
         // PrevPress condition is a StickCPlus workaround, as it uses the same button for Prev and Esc
@@ -588,6 +683,7 @@ int loopOptions(
             long _tmp = millis();
 #ifndef HAS_ENCODER // T-Embed doesn't need it
             LongPress = true;
+#ifndef TINY_DISPLAY
             while (PrevPress && menuType != MENU_TYPE_MAIN) {
                 if (millis() - _tmp > 200)
                     tft.drawArc(
@@ -605,6 +701,7 @@ int loopOptions(
             tft.drawArc(
                 tftWidth / 2, tftHeight / 2, 25, 15, 0, 360, bruceConfig.bgColor, bruceConfig.bgColor
             );
+#endif
             LongPress = false;
 #endif
             if (millis() - _tmp > 700) { // longpress detected to exit
@@ -661,6 +758,35 @@ int loopOptions(
 ** Dependencia: prog_handler =>>    0 - Flash, 1 - LittleFS
 ***************************************************************************************/
 void progressHandler(int progress, size_t total, String message) {
+#ifdef TINY_DISPLAY
+    // 16x8 progress: short label + full-width bar on the bottom row
+    if (total == 0) total = 1;
+    if (progress < 0) progress = 0;
+    if ((size_t)progress > total) progress = total;
+    int filled = (int)((progress * 16) / total); // 0..16 columns
+    if (progress > 0 && filled == 0) filled = 1;
+
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    // Prefer percent when message is the generic "Running, Wait"
+    String m = message;
+    if (m == "Running, Wait" || m.length() == 0) {
+        char pct[5];
+        snprintf(pct, sizeof(pct), "%3d%%", (int)((progress * 100) / total));
+        m = pct;
+    } else {
+        m.toUpperCase();
+        m = m.substring(0, 4);
+    }
+    tft.drawString(m, 0, 0);
+    // bottom row = progress bar
+    for (int x = 0; x < 16; x++) {
+        tft.drawPixel(x, 8 - 1, x < filled ? bruceConfig.priColor : bruceConfig.bgColor);
+    }
+    tft.flushNow();
+    return;
+#endif
     int barWidth = map(progress, 0, total, 0, tftWidth - 40);
     if (barWidth < 3) {
         tft.fillRect(6, 27, tftWidth - 12, tftHeight - 33, bruceConfig.bgColor);
@@ -679,6 +805,23 @@ Opt_Coord drawOptions(
     bool firstRender
 ) {
     Opt_Coord coord;
+#ifdef TINY_DISPLAY
+    // Full-width text-only UI on 16x8 (trimmed authentic font ≈4 px/char → 4 chars).
+    tft.fillScreen(bgcolor);
+    tft.setTextColor(options[index].enabled ? fgcolor : (uint16_t)TFT_DARKGREY, bgcolor);
+    tft.setTextSize(1);
+    String lbl = options[index].label;
+    lbl.toUpperCase();
+    const int maxChars = 4;
+    tft.drawString(lbl.substring(0, maxChars), 0, 0);
+    coord.x = 0;
+    coord.y = 0;
+    coord.size = maxChars;
+    coord.fgcolor = fgcolor;
+    coord.bgcolor = bgcolor;
+    tft.flushNow();
+    return coord;
+#endif
     int menuSize = options.size();
     if (options.size() > MAX_MENU_SIZE) { menuSize = MAX_MENU_SIZE; }
 
@@ -745,6 +888,19 @@ Exit:
 ** Description:   Função para desenhar e mostrar as opçoes de contexto
 ***************************************************************************************/
 void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
+#ifdef TINY_DISPLAY
+    // Text only — same as drawOptions
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(
+        options[index].enabled ? bruceConfig.priColor : (uint16_t)TFT_DARKGREY, bruceConfig.bgColor
+    );
+    tft.setTextSize(1);
+    String lbl = options[index].label;
+    lbl.toUpperCase();
+    tft.drawString(lbl.substring(0, 4), 0, 0);
+    tft.flushNow();
+    return;
+#endif
     drawStatusBar();
     int menuSize = options.size();
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -803,6 +959,10 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
 }
 
 void drawStatusBar() {
+#ifdef TINY_DISPLAY
+    // No status chrome on the 16x8 matrix — only menu text is shown.
+    return;
+#endif
     uint8_t bat = getBattery();
     if (bat > 0) drawBatteryStatus(bat);
 
@@ -888,6 +1048,14 @@ void drawStatusBar() {
 }
 
 void drawMainBorder(bool clear) {
+#ifdef TINY_DISPLAY
+    if (clear) {
+        tft.fillScreen(bruceConfig.bgColor);
+        tft.flushNow();
+    }
+    tft.setTextDatum(0);
+    return;
+#endif
     if (clear) {
         tft.drawPixel(0, 0, 0);
         tft.fillScreen(bruceConfig.bgColor);
@@ -911,6 +1079,17 @@ void drawMainBorderWithTitle(String title, bool clear) {
 
 void printTitle(String title) {
     title.toUpperCase();
+#ifdef TINY_DISPLAY
+    // Title only, full clear first to avoid leftover pixels
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    String t = title;
+    t.toUpperCase();
+    tft.drawString(t.substring(0, 4), 0, 0);
+    tft.flushNow();
+    return;
+#endif
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
 
     // Scale down title font if it doesn't fit the screen width
@@ -955,6 +1134,14 @@ void printCenterFootnote(String text) {
 }
 
 void drawBatteryStatus(uint8_t bat) {
+#ifdef TINY_DISPLAY
+    if (bat == 0) return;
+    tft.drawRect(0, 0, 5, 1, bruceConfig.priColor);
+    int fill = (3 * bat) / 100;
+    for (int i = 0; i < fill; i++) tft.drawPixel(1 + i, 0, bruceConfig.priColor);
+    tft.flushNow();
+    return;
+#endif
     if (bat == 0) return;
 
     bool charging = isCharging();
@@ -996,6 +1183,24 @@ void drawWireguardStatus(int x, int y) {
 #define MAX_ITEMS (int)(tftHeight - 20) / (LH * FM)
 Opt_Coord listFiles(int index, std::vector<FileList> fileList) {
     Opt_Coord coord;
+#ifdef TINY_DISPLAY
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(1);
+    if (index < (int)fileList.size()) {
+        String fn = fileList[index].filename;
+        fn.toUpperCase();
+        if (fileList[index].folder) fn = "/" + fn;
+        tft.drawString(fn.substring(0, 4), 0, 0);
+        coord.x = 0;
+        coord.y = 0;
+        coord.size = 4;
+        coord.fgcolor = bruceConfig.priColor;
+        coord.bgcolor = bruceConfig.bgColor;
+    }
+    tft.flushNow();
+    return coord;
+#endif
     tft.drawPixel(0, 0, bruceConfig.bgColor);
     if (index == 0) {
         tft.fillScreen(bruceConfig.bgColor);

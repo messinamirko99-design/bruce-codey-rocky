@@ -1331,6 +1331,66 @@ void setKeyboardLanguage() {
 /// Supported values: "QWERTY" (default), "AZERTY" (French), "QWERTZ" (German).
 /// Returns the user typed string, or the ASCII ESC character if cancelled.
 String keyboard(String current_text, int max_size, String textbox_title, bool mask_input) {
+#ifdef TINY_DISPLAY
+    // 16x8 password/text entry — no full QWERTY grid (that crashes on 16px height).
+    // Controls (Codey): B=prev char, C=next char, A=insert, Power/Esc=done (empty=cancel)
+    // Special candidates: '<' = backspace, ' ' = space
+    static const char charset[] =
+        "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ !@#$%&*-_=+.,/?<";
+    const int nchars = (int)(sizeof(charset) - 1);
+    String out = current_text;
+    int ci = 0;
+    for (int i = 0; i < nchars; i++) {
+        if (charset[i] == 'a') { ci = i; break; }
+    }
+
+    auto redraw = [&]() {
+        tft.fillScreen(bruceConfig.bgColor);
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        tft.setTextSize(1);
+        char line[8];
+        char show = charset[ci];
+        if (show == '<') {
+            snprintf(line, sizeof(line), "<BS");
+        } else if (show == ' ') {
+            snprintf(line, sizeof(line), ">SP");
+        } else {
+            snprintf(line, sizeof(line), ">%c%02d", show, (int)out.length() % 100);
+        }
+        tft.drawString(String(line).substring(0, 4), 0, 0);
+        tft.flushNow();
+    };
+
+    redraw();
+    while (true) {
+        if (check(PrevPress)) {
+            ci = (ci - 1 + nchars) % nchars;
+            redraw();
+            while (check(PrevPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
+        if (check(NextPress)) {
+            ci = (ci + 1) % nchars;
+            redraw();
+            while (check(NextPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
+        if (check(SelPress)) {
+            char c = charset[ci];
+            if (c == '<') {
+                if (out.length() > 0) out.remove(out.length() - 1);
+            } else if ((int)out.length() < max_size) {
+                out += c;
+            }
+            redraw();
+            while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
+        if (check(EscPress)) {
+            while (check(EscPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+            if (out.length() == 0) return String("\x1B");
+            return out;
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+#else
     String lang = bruceConfig.keyboardLang;
     if (lang == "AZERTY") {
         return generalKeyboard<azerty_keyboard_height, azerty_keyboard_width>(
@@ -1341,11 +1401,11 @@ String keyboard(String current_text, int max_size, String textbox_title, bool ma
             current_text, max_size, textbox_title, qwertz_keyset, mask_input
         );
     } else {
-        // Default: QWERTY
         return generalKeyboard<qwerty_keyboard_height, qwerty_keyboard_width>(
             current_text, max_size, textbox_title, qwerty_keyset, mask_input
         );
     }
+#endif
 }
 
 /// This calls a keyboard with the characters useful to write hexadecimal codes.
